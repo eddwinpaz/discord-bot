@@ -6,9 +6,10 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
-	"github.com/eddwinpaz/entities"
+	"github.com/eddwinpaz/discord-bot/entities"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -16,7 +17,7 @@ import (
 func main() {
 
 	// Create a new Discord session using the provided bot token.
-	dg, err := discordgo.New("Bot " + "ODA2NjQ0MTgyNjQ3MDQ2MTkw.YBsb7w.Sb7o5Ehc680EncJoUWXpfoRuztw")
+	dg, err := discordgo.New("Bot " + os.Getenv("token"))
 	if err != nil {
 		fmt.Println("error creating Discord session,", err)
 		return
@@ -77,6 +78,13 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		uf := GetEconomyValue("dolar")
 		s.ChannelMessageSend(m.ChannelID, uf)
 	}
+
+	if strings.Contains(m.Content, "empleos como") {
+		word := strings.Replace(m.Content, "empleos como", "", -1)
+		query := strings.Replace(word, " ", "+", -1)
+		jobs := SearchGetOnBoardJobsByTitle(query)
+		s.ChannelMessageSend(m.ChannelID, jobs)
+	}
 }
 
 // GetEconomyValue returns value from API for UF and US Dollars of todays value
@@ -88,19 +96,67 @@ func GetEconomyValue(indicator string) string {
 		resp, err := http.Get(url)
 		if err != nil {
 			responseChannel <- msg
+			close(responseChannel)
+			return
 		}
 		defer resp.Body.Close()
 		var response entities.Indicator
 		_ = json.NewDecoder(resp.Body).Decode(&response)
 		if err != nil {
 			responseChannel <- msg
+			close(responseChannel)
+			return
 		}
 		firstValue := response.Serie[0]
 		if indicator == "uf" {
-			msg = fmt.Sprintf("wey! **%s** esta hoy a **$ %.2f %s**", response.Nombre, firstValue.Valor, response.UnidadMedida)
+			msg = fmt.Sprintf("wey! **%s** esta hoy a **$ %.2f %s**",
+				response.Nombre, firstValue.Valor, response.UnidadMedida)
 		} else if indicator == "dolar" {
-			msg = fmt.Sprintf("wey! **%s** esta hoy a **$ %.2f %s**", response.Nombre, firstValue.Valor, response.UnidadMedida)
+			msg = fmt.Sprintf("wey! **%s** esta hoy a **$ %.2f %s**",
+				response.Nombre, firstValue.Valor, response.UnidadMedida)
 		}
+		responseChannel <- msg
+		close(responseChannel)
+	}()
+	return <-responseChannel
+
+}
+
+// SearchGetOnBoardJobsByTitle search jobs on getonbrd.com
+func SearchGetOnBoardJobsByTitle(title string) string {
+
+	url := fmt.Sprintf("https://www.getonbrd.com/api/v0/search/jobs?query=%s", title)
+
+	responseChannel := make(chan string)
+
+	msg := "Lo siento wey! el servicio no me dio el valor del dia. seguire buscando; **palabra de honor**"
+
+	go func() {
+		resp, err := http.Get(url)
+		if err != nil {
+			responseChannel <- msg
+		}
+		defer resp.Body.Close()
+		var response entities.GetOnBoard
+
+		_ = json.NewDecoder(resp.Body).Decode(&response)
+
+		if err != nil {
+			responseChannel <- msg
+			close(responseChannel)
+			return
+		}
+
+		if len(response.Data) == 0 {
+			responseChannel <- msg
+			close(responseChannel)
+			return
+		}
+
+		firstValue := response.Data[0]
+		msg = fmt.Sprintf("wey! en getonbrd.com hay una empresa que busca **%s** en **%s** pagando salario de $ %.2f USD más info aqui %s",
+			firstValue.Attributes.Title, firstValue.Attributes.Country, firstValue.Attributes.MaxSalary, firstValue.Links.PublicURL)
+
 		responseChannel <- msg
 		close(responseChannel)
 	}()
